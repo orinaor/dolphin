@@ -9,7 +9,7 @@ from .const import (
     UPDATE_INTERVAL,
 )
 
-_LOGGER: logging.Logger = logging.getLogger(__package__)
+_LOGGER: logging.getLogger = logging.getLogger(__package__)
 
 
 class UpdateCoordinator(DataUpdateCoordinator):

@@ -17,25 +17,32 @@ PARALLEL_UPDATES = 1
 
 
 async def async_setup_entry(
-        hass: homeassistant.core.HomeAssistant,
-        entry: ConfigEntry,
-        async_add_entities: Callable[[List[Entity], bool], None],
+    hass: homeassistant.core.HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: Callable[[List[Entity], bool], None],
 ) -> None:
     """Set up Dolphin switch based on a config entry."""
     coordinator: UpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     switches = []
 
     for device in coordinator.data.keys():
-        switches.append(ShabbatSwitch(hass=hass, coordinator=coordinator, device=device))
-        switches.append(FixedTemperature(hass=hass, coordinator=coordinator, device=device))
+        switches.append(
+            ShabbatSwitch(hass=hass, coordinator=coordinator, device=device)
+        )
+        switches.append(
+            FixedTemperature(hass=hass, coordinator=coordinator, device=device)
+        )
         for switch in range(1, 7):
-            switches.append(DropSwitch(hass=hass, coordinator=coordinator, index=switch, device=device))
+            switches.append(
+                DropSwitch(
+                    hass=hass, coordinator=coordinator, index=switch, device=device
+                )
+            )
 
     async_add_entities(switches)
 
 
 class DropSwitch(CoordinatorEntity, SwitchEntity):
-
     def __init__(self, hass, coordinator, index, device):
         CoordinatorEntity.__init__(self, coordinator)
         self._hass = hass
@@ -43,7 +50,9 @@ class DropSwitch(CoordinatorEntity, SwitchEntity):
         self._coordinator = coordinator
         self._device = device
         self._is_on = False
-        self.entity_id = async_generate_entity_id(DOMAIN + ".{}", None or f"{device}_drop{index}", hass=hass)
+        self.entity_id = async_generate_entity_id(
+            DOMAIN + ".{}", None or f"{device}_drop{index}", hass=hass
+        )
 
     @property
     def unique_id(self):
@@ -52,11 +61,21 @@ class DropSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def name(self):
         if self._coordinator.data[self._device].showerTemperature != None:
-            showerTemperature = self._coordinator.data[self._device].showerTemperature[self._id - 1]['temp'] if len(
-                self._coordinator.data[self._device].showerTemperature) > self._id - 1 else None
+            showerTemperature = (
+                self._coordinator.data[self._device].showerTemperature[self._id - 1][
+                    "temp"
+                ]
+                if len(self._coordinator.data[self._device].showerTemperature)
+                > self._id - 1
+                else None
+            )
         else:
             showerTemperature = None
-        return f"{self._id} Shower - {showerTemperature}°C" if self._id == 1 else f"{self._id} Showers - {showerTemperature}°C"
+        return (
+            f"{self._id} Shower - {showerTemperature}°C"
+            if self._id == 1
+            else f"{self._id} Showers - {showerTemperature}°C"
+        )
 
     @property
     def icon(self):
@@ -72,7 +91,10 @@ class DropSwitch(CoordinatorEntity, SwitchEntity):
         if self._coordinator.data[self._device].fixedTemperature:
             return False
         if self._coordinator.data[self._device].showerTemperature != None:
-            if len(self._coordinator.data[self._device].showerTemperature) > self._id - 1:
+            if (
+                len(self._coordinator.data[self._device].showerTemperature)
+                > self._id - 1
+            ):
                 return True
 
         return False
@@ -87,39 +109,46 @@ class DropSwitch(CoordinatorEntity, SwitchEntity):
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
         return DeviceInfo(
-            identifiers={
-                (DOMAIN, self._device)
-            },
+            identifiers={(DOMAIN, self._device)},
         )
 
     async def async_turn_on(self):
 
         current_temp = self._coordinator.data[self._device].temperature
-        drop_temperature = self._coordinator.data[self._device].showerTemperature[self._id - 1]['temp']
+        drop_temperature = self._coordinator.data[self._device].showerTemperature[
+            self._id - 1
+        ]["temp"]
 
-        if current_temp <= drop_temperature and self._coordinator.data[self._device].power == False:
-            await self._coordinator.dolphin.turnOnManually(self._coordinator.dolphin._user, drop_temperature,
-                                                           self._device)
+        if (
+            current_temp <= drop_temperature
+            and self._coordinator.data[self._device].power == False
+        ):
+            await self._coordinator.dolphin.turnOnManually(
+                self._coordinator.dolphin._user, drop_temperature, self._device
+            )
             self._is_on = True
             await self.coordinator.async_request_refresh()
             self.async_write_ha_state()
 
     async def async_turn_off(self):
 
-        await self._coordinator.dolphin.turnOffManually(self._coordinator.dolphin._user, self._device)
+        await self._coordinator.dolphin.turnOffManually(
+            self._coordinator.dolphin._user, self._device
+        )
         self._is_on = False
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
 
 class ShabbatSwitch(CoordinatorEntity, SwitchEntity):
-
     def __init__(self, hass, coordinator, device):
         CoordinatorEntity.__init__(self, coordinator)
         self._hass = hass
         self._coordinator = coordinator
         self._device = device
-        self.entity_id = async_generate_entity_id(DOMAIN + ".{}", None or f"{device}_sabbath_mode", hass=hass)
+        self.entity_id = async_generate_entity_id(
+            DOMAIN + ".{}", None or f"{device}_sabbath_mode", hass=hass
+        )
 
     @property
     def unique_id(self):
@@ -137,9 +166,7 @@ class ShabbatSwitch(CoordinatorEntity, SwitchEntity):
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
         return DeviceInfo(
-            identifiers={
-                (DOMAIN, self._device)
-            },
+            identifiers={(DOMAIN, self._device)},
             name=self.name,
         )
 
@@ -148,24 +175,29 @@ class ShabbatSwitch(CoordinatorEntity, SwitchEntity):
         return self._coordinator.data[self._device].shabbat
 
     async def async_turn_on(self):
-        await self._coordinator.dolphin.enableShabbat(self._coordinator.dolphin._user, self._device)
+        await self._coordinator.dolphin.enableShabbat(
+            self._coordinator.dolphin._user, self._device
+        )
         self._coordinator.data[self._device].shabbat = True
         self.async_write_ha_state()
 
     async def async_turn_off(self):
-        await self._coordinator.dolphin.disableShabbat(self._coordinator.dolphin._user, self._device)
+        await self._coordinator.dolphin.disableShabbat(
+            self._coordinator.dolphin._user, self._device
+        )
         self._coordinator.data[self._device].shabbat = False
         self.async_write_ha_state()
 
 
 class FixedTemperature(CoordinatorEntity, SwitchEntity):
-
     def __init__(self, hass, coordinator, device):
         CoordinatorEntity.__init__(self, coordinator)
         self._hass = hass
         self._coordinator = coordinator
         self._device = device
-        self.entity_id = async_generate_entity_id(DOMAIN + ".{}", None or f"{device}_fixed_temperature", hass=hass)
+        self.entity_id = async_generate_entity_id(
+            DOMAIN + ".{}", None or f"{device}_fixed_temperature", hass=hass
+        )
 
     @property
     def unique_id(self):
@@ -183,9 +215,7 @@ class FixedTemperature(CoordinatorEntity, SwitchEntity):
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
         return DeviceInfo(
-            identifiers={
-                (DOMAIN, self._device)
-            },
+            identifiers={(DOMAIN, self._device)},
             name=self.name,
         )
 
@@ -194,14 +224,19 @@ class FixedTemperature(CoordinatorEntity, SwitchEntity):
         return self._coordinator.data[self._device].fixedTemperature
 
     async def async_turn_on(self):
-        await self._coordinator.dolphin.turnOnFixedTemperature(self._coordinator.dolphin._user, self._device,
-                                                               self._coordinator.data[self._device].targetTemperature)
+        await self._coordinator.dolphin.turnOnFixedTemperature(
+            self._coordinator.dolphin._user,
+            self._device,
+            self._coordinator.data[self._device].targetTemperature,
+        )
         self._coordinator.data[self._device].fixedTemperature = True
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
     async def async_turn_off(self):
-        await self._coordinator.dolphin.turnOffFixedTemperature(self._coordinator.dolphin._user, self._device)
+        await self._coordinator.dolphin.turnOffFixedTemperature(
+            self._coordinator.dolphin._user, self._device
+        )
         self._coordinator.data[self._device].fixedTemperature = False
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
