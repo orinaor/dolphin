@@ -161,9 +161,10 @@ class Dolphin:
             "API_Key": user.api,
         }
 
-        if not (data := await self.request("/HA/V1/isEnergyMeter.php", "POST", data)):
+        # Older devices have no current meter and answer {"isEnergyMeter": "0"}.
+        if not isinstance(data := await self.request("/HA/V1/isEnergyMeter.php", "POST", data), dict):
             return 0
-        return data['isEnergyMeter']
+        return data.get('isEnergyMeter', 0)
 
     async def turnOnFixedTemperature(self, user: User, deviceName: str, temperature: str):
         data = {
