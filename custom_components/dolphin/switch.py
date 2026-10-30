@@ -2,6 +2,7 @@ import logging
 from typing import Callable, List
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity import Entity
 import homeassistant.core
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -60,26 +61,37 @@ class DropSwitch(CoordinatorEntity, SwitchEntity):
         return "mdi:shower"
 
     @property
+    def _drop_temperature(self):
+        """Temperature of this drop, or None if the device has fewer drops."""
+        showers = self._coordinator.data[self._device].showerTemperature
+        if showers is not None and len(showers) > self._id - 1:
+            return showers[self._id - 1]['temp']
+        return None
+
+    @property
     def available(self):
-        """Return availability."""
+        """Return availability.
+
+        A drop stays available while the boiler heats for another drop; it then
+        just reports off, so the UI does not look like the device is offline.
+        """
         if not super().available or self._device not in self._coordinator.data:
             return False
         if self._coordinator.data[self._device].shabbat:
             return False
-        if self._coordinator.data[self._device].power and not self._is_on:
-            return False
         if self._coordinator.data[self._device].fixedTemperature:
             return False
-        if self._coordinator.data[self._device].showerTemperature != None:
-            if len(self._coordinator.data[self._device].showerTemperature) > self._id - 1:
-                return True
-
-        return False
+        return self._drop_temperature is not None
 
     @property
     def is_on(self):
-        if not self._coordinator.data[self._device].power:
+        device = self._coordinator.data[self._device]
+        if not device.power:
             self._is_on = False
+            return False
+        if device.targetTemperature is not None and self._drop_temperature is not None:
+            # Heating was started for this drop's temperature, whoever started it.
+            return device.targetTemperature == self._drop_temperature
         return self._is_on
 
     @property
@@ -92,16 +104,24 @@ class DropSwitch(CoordinatorEntity, SwitchEntity):
         )
 
     async def async_turn_on(self):
+        device = self._coordinator.data[self._device]
+        current_temp = device.temperature
+        drop_temperature = self._drop_temperature
 
-        current_temp = self._coordinator.data[self._device].temperature
-        drop_temperature = self._coordinator.data[self._device].showerTemperature[self._id - 1]['temp']
+        if device.power:
+            raise ServiceValidationError(
+                f"The boiler is already heating to {device.targetTemperature}°C; turn it off first"
+            )
+        if current_temp is not None and current_temp > drop_temperature:
+            raise ServiceValidationError(
+                f"The water is already {current_temp}°C, hotter than {drop_temperature}°C"
+            )
 
-        if current_temp <= drop_temperature and self._coordinator.data[self._device].power == False:
-            await self._coordinator.dolphin.turnOnManually(self._coordinator.dolphin._user, drop_temperature,
-                                                           self._device)
-            self._is_on = True
-            await self.coordinator.async_request_refresh()
-            self.async_write_ha_state()
+        await self._coordinator.dolphin.turnOnManually(self._coordinator.dolphin._user, drop_temperature,
+                                                       self._device)
+        self._is_on = True
+        await self.coordinator.async_request_refresh()
+        self.async_write_ha_state()
 
     async def async_turn_off(self):
 
