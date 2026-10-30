@@ -5,8 +5,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity import Entity
 import homeassistant.core
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from .coordinator import UpdateCoordinator
-from homeassistant.helpers.entity import DeviceInfo, async_generate_entity_id
+from .coordinator import UpdateCoordinator, entity_unique_id
+from homeassistant.helpers.entity import DeviceInfo
 from .const import (
     DOMAIN,
 )
@@ -21,11 +21,11 @@ async def async_setup_entry(
         entry: ConfigEntry,
         async_add_entities: Callable[[List[Entity], bool], None],
 ) -> None:
-    coordinator: UpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: UpdateCoordinator = entry.runtime_data
     switches = []
 
     for device in coordinator.data.keys():
-        if await coordinator.dolphin.isEnergyMeter(coordinator.dolphin._user, device) == '1':
+        if coordinator.energy_meters.get(device):
             switches.append(PowerSensor(hass=hass, coordinator=coordinator, device=device))
 
     async_add_entities(switches)
@@ -39,11 +39,8 @@ class PowerSensor(CoordinatorEntity, SensorEntity):
         self._unit_of_measurement = "A"
         self._state_class = "current"
         self._coordinator = coordinator
-        self.entity_id = async_generate_entity_id(DOMAIN + ".{}", None or f"{device}_electric_current", hass=hass)
-
-    @property
-    def unique_id(self):
-        return self.entity_id
+        self._attr_unique_id = entity_unique_id(device, "electric_current")
+        self.entity_id = f"sensor.{self._attr_unique_id.split('.', 1)[1]}"
 
     @property
     def name(self):

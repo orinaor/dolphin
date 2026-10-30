@@ -6,7 +6,9 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 
-from .API.dolphin import Dolphin, User
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+from .API.dolphin import Dolphin, DolphinError
 from .const import CONF_USERNAME, CONF_PASSWORD, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,10 +58,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _test_credentials(self, username, password) -> bool:
 
-        async with Dolphin() as dolphin:
-            user = User
-            user.email = username
-            user = await dolphin.getAPIKey(user, password)
-            if user.api != "failed":
-                return True
-        return False
+        dolphin = Dolphin(async_get_clientsession(self.hass))
+        try:
+            await dolphin.login(username, password)
+        except DolphinError as err:
+            _LOGGER.warning("Dolphin login failed: %s", err)
+            return False
+        return True

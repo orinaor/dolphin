@@ -5,8 +5,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity import Entity
 import homeassistant.core
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from .coordinator import UpdateCoordinator
-from homeassistant.helpers.entity import DeviceInfo, async_generate_entity_id
+from .coordinator import UpdateCoordinator, entity_unique_id
+from homeassistant.helpers.entity import DeviceInfo
 from .const import (
     DOMAIN,
 )
@@ -22,7 +22,7 @@ async def async_setup_entry(
         async_add_entities: Callable[[List[Entity], bool], None],
 ) -> None:
     """Set up Dolphin switch based on a config entry."""
-    coordinator: UpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: UpdateCoordinator = entry.runtime_data
     switches = []
 
     for device in coordinator.data.keys():
@@ -43,11 +43,8 @@ class DropSwitch(CoordinatorEntity, SwitchEntity):
         self._coordinator = coordinator
         self._device = device
         self._is_on = False
-        self.entity_id = async_generate_entity_id(DOMAIN + ".{}", None or f"{device}_drop{index}", hass=hass)
-
-    @property
-    def unique_id(self):
-        return self.entity_id
+        self._attr_unique_id = entity_unique_id(device, f"drop{index}")
+        self.entity_id = f"switch.{self._attr_unique_id.split('.', 1)[1]}"
 
     @property
     def name(self):
@@ -65,6 +62,8 @@ class DropSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def available(self):
         """Return availability."""
+        if not super().available or self._device not in self._coordinator.data:
+            return False
         if self._coordinator.data[self._device].shabbat:
             return False
         if self._coordinator.data[self._device].power and not self._is_on:
@@ -119,11 +118,8 @@ class ShabbatSwitch(CoordinatorEntity, SwitchEntity):
         self._hass = hass
         self._coordinator = coordinator
         self._device = device
-        self.entity_id = async_generate_entity_id(DOMAIN + ".{}", None or f"{device}_sabbath_mode", hass=hass)
-
-    @property
-    def unique_id(self):
-        return self.entity_id
+        self._attr_unique_id = entity_unique_id(device, "sabbath_mode")
+        self.entity_id = f"switch.{self._attr_unique_id.split('.', 1)[1]}"
 
     @property
     def name(self):
@@ -165,11 +161,8 @@ class FixedTemperature(CoordinatorEntity, SwitchEntity):
         self._hass = hass
         self._coordinator = coordinator
         self._device = device
-        self.entity_id = async_generate_entity_id(DOMAIN + ".{}", None or f"{device}_fixed_temperature", hass=hass)
-
-    @property
-    def unique_id(self):
-        return self.entity_id
+        self._attr_unique_id = entity_unique_id(device, "fixed_temperature")
+        self.entity_id = f"switch.{self._attr_unique_id.split('.', 1)[1]}"
 
     @property
     def name(self):

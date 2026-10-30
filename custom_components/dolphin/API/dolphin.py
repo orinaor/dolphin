@@ -3,13 +3,26 @@ from typing import Any
 import aiohttp
 from yarl import URL
 import asyncio
-import ssl
-import certifi
 import json
 import logging
+
+from homeassistant.exceptions import HomeAssistantError
+
 from .models import User, Device
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class DolphinError(HomeAssistantError):
+    """Generic Dolphin API error."""
+
+
+class DolphinConnectionError(DolphinError):
+    """Dolphin cloud could not be reached."""
+
+
+class DolphinAuthError(DolphinError):
+    """Dolphin cloud rejected the credentials."""
 
 
 class Dolphin:
@@ -17,63 +30,64 @@ class Dolphin:
 
     host: str = "api.dolphinboiler.com"
     request_timeout: float = 10.0
-    session: aiohttp.client.ClientSession | None = None
-    _client: aiohttp.ClientWebSocketResponse | None = None
-    _close_session: bool = False
-    _device: dict[str, Device] | None = None
-    _user: User | None = None
 
-    def __init__(self):
-        self.ssl_context = None
-        self._close_session = True
+    def __init__(self, session: aiohttp.ClientSession):
+        self.session = session
+        self._device: dict[str, Device] = {}
+        self._user: User | None = None
 
-    async def create_ssl_context(self):
-        """Create the SSL context asynchronously."""
-        loop = asyncio.get_event_loop()
-        self.ssl_context = await loop.run_in_executor(None, ssl.create_default_context, cafile=certifi.where())
-
-    async def request(self, uri: str = "", method: str = "POST", data: dict[str, Any] | None = None) -> Any:
+    async def request(self, uri: str = "", method: str = "POST", data: dict[str, Any] | None = None,
+                      expect_json: bool = True) -> Any:
         url = URL.build(scheme="https", host=self.host, path=uri)
 
-        if self.session is None:
-            conn = aiohttp.TCPConnector(ssl=self.ssl_context)
-            self.session = aiohttp.ClientSession(connector=conn)
-
         try:
-            response = await self.session.request(method, url, data=data)
-            response = await response.text("UTF-8")
-
-            if "getAPIkey" not in url.path:
-                return json.loads(response)
-            return response
-
+            async with asyncio.timeout(self.request_timeout):
+                response = await self.session.request(method, url, data=data)
+                response.raise_for_status()
+                text = await response.text("UTF-8")
         except asyncio.TimeoutError as exception:
-            _LOGGER.error(f"Timeout error while requesting {uri}: {exception}")
+            raise DolphinConnectionError(f"Timeout while requesting {uri}") from exception
         except (aiohttp.ClientError, socket.gaierror) as exception:
-            _LOGGER.error(f"Client error while requesting {uri}: {exception}")
-        return None
+            raise DolphinConnectionError(f"Error while requesting {uri}: {exception}") from exception
 
-    async def async_setup(self):
-        """Set up the Dolphin integration."""
-        await self.create_ssl_context()
+        if "getAPIkey" in url.path or not expect_json:
+            return text.strip()
+        if not text.strip():
+            return None
+        try:
+            return json.loads(text)
+        except ValueError as exception:
+            raise DolphinError(f"Invalid response from {uri}: {text[:100]!r}") from exception
 
-    async def update(self, user: User) -> Device:
+    async def login(self, email: str, password: str) -> User:
+        """Fetch a fresh API key and the device list."""
+        user = User(None)
+        user.email = email
+        await self.getAPIKey(user, password)
+        await self.getDevices(user)
+        self._user = user
+        return user
+
+    async def update(self, user: User) -> dict[str, Device]:
         for device in user.device:
-
             data = {
                 "deviceName": device['deviceName'],
                 "email": user.email,
                 "API_Key": user.api,
             }
-            if not (data := await self.request("/HA/V1/getMainScreenData.php", "POST", data)):
-                pass
+            response = await self.request("/HA/V1/getMainScreenData.php", "POST", data)
 
-            if self._device is None:
-                self._device = {device['deviceName']: Device(data)}
-            elif device['deviceName'] not in self._device:
-                self._device.update({device['deviceName']: Device(data)})
+            if not response:
+                # The API returns nothing for some states (e.g. Shabbat); keep the last known state.
+                _LOGGER.debug("No data received for device %s, keeping last known state", device['deviceName'])
+                response = {}
+            elif not isinstance(response, dict):
+                raise DolphinError(f"Unexpected response for device {device['deviceName']}: {response!r}")
+
+            if device['deviceName'] not in self._device:
+                self._device[device['deviceName']] = Device(response)
             else:
-                self._device[device['deviceName']] = self._device[device['deviceName']].update_from_dict(data)
+                self._device[device['deviceName']].update_from_dict(response)
 
         return self._device
 
@@ -82,25 +96,26 @@ class Dolphin:
             "email": user.email,
             "password": password,
         }
-        if not (data := await self.request("/HA/V1/getAPIkey.php", "POST", data)):
-            pass
+        api_key = await self.request("/HA/V1/getAPIkey.php", "POST", data)
+        if not api_key:
+            raise DolphinError("Empty API key response")
+        if api_key == "failed":
+            raise DolphinAuthError("Invalid username or password")
 
-        if self._user is None:
-            self._user = User(data)
-
-        return self._user
+        user.update_from_dict(api_key)
+        return user
 
     async def getDevices(self, user: User) -> User:
         data = {
             "email": user.email,
             "API_Key": user.api,
         }
-        if not (data := await self.request("/HA/V1//getDevices.php", "POST", data)):
-            pass
+        devices = await self.request("/HA/V1//getDevices.php", "POST", data)
+        if not isinstance(devices, list):
+            raise DolphinError(f"Unexpected device list response: {devices!r}")
 
-        self._user.update_from_dict(data)
-
-        return self._user
+        user.update_from_dict(devices)
+        return user
 
     async def turnOnManually(self, user: User, temperature: str, deviceName: str):
         data = {
@@ -110,8 +125,7 @@ class Dolphin:
             "API_Key": user.api,
         }
 
-        if not (data := await self.request("/HA/V1/turnOnManually.php", "POST", data)):
-            pass
+        await self.request("/HA/V1/turnOnManually.php", "POST", data, expect_json=False)
 
     async def turnOffManually(self, user: User, deviceName: str):
         data = {
@@ -120,8 +134,7 @@ class Dolphin:
             "API_Key": user.api,
         }
 
-        if not (data := await self.request("/HA/V1/turnOffManually.php", "POST", data)):
-            pass
+        await self.request("/HA/V1/turnOffManually.php", "POST", data, expect_json=False)
 
     async def enableShabbat(self, user: User, deviceName: str):
         data = {
@@ -130,8 +143,7 @@ class Dolphin:
             "API_Key": user.api,
         }
 
-        if not (data := await self.request("/HA/V1/enableShabbat.php", "POST", data)):
-            pass
+        await self.request("/HA/V1/enableShabbat.php", "POST", data, expect_json=False)
 
     async def disableShabbat(self, user: User, deviceName: str):
         data = {
@@ -140,8 +152,7 @@ class Dolphin:
             "API_Key": user.api,
         }
 
-        if not (data := await self.request("/HA/V1/disableShabbat.php", "POST", data)):
-            pass
+        await self.request("/HA/V1/disableShabbat.php", "POST", data, expect_json=False)
 
     async def isEnergyMeter(self, user: User, deviceName: str):
         data = {
@@ -162,8 +173,7 @@ class Dolphin:
             "API_Key": user.api,
         }
 
-        if not (data := await self.request("/HA/V1/setFixedTemperature.php", "POST", data)):
-            pass
+        await self.request("/HA/V1/setFixedTemperature.php", "POST", data, expect_json=False)
 
     async def turnOffFixedTemperature(self, user: User, deviceName: str):
         data = {
@@ -172,27 +182,4 @@ class Dolphin:
             "API_Key": user.api,
         }
 
-        if not (data := await self.request("/HA/V1/turnOffFixedTemperature.php", "POST", data)):
-            pass
-
-    async def disconnect(self) -> None:
-        """Disconnect from the WebSocket of a Dolphin device."""
-        if not self._client or not self.connected:
-            return
-
-        await self._client.close()
-
-    async def close(self) -> None:
-        """Close open client session and resources."""
-        if self.session:
-            await self.session.close()
-        self.session = None
-        _LOGGER.info("Session closed successfully")
-
-    async def __aenter__(self):
-        """Async enter."""
-        return self
-
-    async def __aexit__(self, *_exc_info: Any) -> None:
-        """Async exit."""
-        await self.close()
+        await self.request("/HA/V1/turnOffFixedTemperature.php", "POST", data, expect_json=False)

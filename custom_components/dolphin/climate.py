@@ -29,7 +29,7 @@ async def async_setup_entry(
         entry: ConfigEntry,
         async_add_entities: Callable[[List[Entity], bool], None],
 ) -> None:
-    coordinator: UpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: UpdateCoordinator = entry.runtime_data
     switches = []
 
     for device in coordinator.data.keys():
@@ -123,7 +123,11 @@ class DolphinWaterHeater(CoordinatorEntity, ClimateEntity):
     @property
     def available(self):
         """Return availability."""
-        return not self._coordinator.data[self._device].shabbat
+        return (
+            super().available
+            and self._device in self._coordinator.data
+            and not self._coordinator.data[self._device].shabbat
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
